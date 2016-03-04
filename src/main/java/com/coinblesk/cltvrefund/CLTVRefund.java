@@ -33,7 +33,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.ListenableFuture;
 
 public class CLTVRefund {
 	private static final Logger LOG = LoggerFactory.getLogger(CLTVRefund.class);
@@ -50,11 +49,13 @@ public class CLTVRefund {
     private Script redeemScript;
     
     private long expiryTime = 0;
+    private boolean spendAfterExpiry;
     
 
-	public CLTVRefund(NetworkParameters params) {
+	public CLTVRefund(NetworkParameters params, boolean spendAfterExpiry) {
 		BriefLogFormatter.init();
 		this.params = params;
+		this.spendAfterExpiry = spendAfterExpiry;
 	}
 
 	public void run() {
@@ -66,7 +67,7 @@ public class CLTVRefund {
 		// create redeem script with time lock in the future.
 		expiryTime = wallet.getLastBlockSeenHeight() + 3;
 		redeemScript = createTimeLockedContract(serviceKey, userKey, expiryTime);
-		LOG.info("Redeem script: {}", redeemScript);
+		LOG.info("Redeem script (lock time {}): {}", expiryTime, redeemScript);
 		LOG.info("Redeem script (hex): {}", Utils.HEX.encode(redeemScript.getProgram()));
 		
 		/*
@@ -92,6 +93,14 @@ public class CLTVRefund {
 		wallet.addCoinsReceivedEventListener(new CoinsReceivedListener());
 		
 		LOG.info("\n===\n\tPay some coins to the address {}\n===", address);
+		
+		Runtime.getRuntime().addShutdownHook(new Thread() {
+			@Override
+			public void run() {
+				super.run();
+				CLTVRefund.this.stop();
+			}
+		});
 		appKit.awaitTerminated();
 	}
 	
@@ -188,8 +197,13 @@ public class CLTVRefund {
 			// two possibilities: 
 			// - send before the expiry time with two signatures
 			// - send after the expiry time with just the signature of the user
-//			spendFromLockedTx_beforeExpiry(tx);
-			spendFromLockedTx_afterExpiry(tx);
+			if (spendAfterExpiry) {
+				LOG.info("Try spending after expiry time ({}) with one signature.", expiryTime);
+				spendFromLockedTx_afterExpiry(tx);
+			} else {
+				LOG.info("Try spending before expiry time ({}) with two signatures.", expiryTime);
+				spendFromLockedTx_beforeExpiry(tx);
+			}
 		}
 		
 		/**
